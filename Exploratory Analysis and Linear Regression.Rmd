@@ -1,0 +1,387 @@
+---
+  title: "Exploratory Analysis and Regression - Example"
+  author: Avision Ho
+  date: July 29, 2017
+  output: 
+    html_document:
+      number_sections: true
+      code_folding: hide
+      fig_caption: true
+---
+  
+```{r include = FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+setwd("//shenetapp01/efa2/CVH/5-Strategy/Strategic Analysis/Predictive Analysis Team/Data Science Tools and Techniques/R/Multiple Linear Regression")
+library(rmarkdown)
+library(tidyverse)
+library(knitr)
+library(ggplot2)
+library(pander)
+library(caTools)
+library(car)
+library(MASS)
+library(caret)
+library(e1071)
+house_data <- read_csv(file = 'kc_house_data.csv')
+attach(house_data)
+# Turn off scientific notation
+options(scipen = 999)
+````
+# Background
+The data used in this exercise comes from  https://www.kaggle.com/harlfoxem/housesalesprediction. It is on house sale prices in Kings County, USA.
+
+Note that in the code document, the working directory address will need to be changed.
+
+# Exercises
+## What is the average price per bedroom and bathroom? 
+The average (mean) price per bedroom and bathroom is given in the table below. In the interests of keeping the document short, I have only shown the 'head' of the table.
+```{r Q2.2}
+# Ideally, would want the markdown to be responsive in the way it displays the top results of the temp table below, and then they can click a button to see the full table, but to add interactivity to markdown documents, need to incorporate rshiny, which I haven't used before. Plan to investigate this further after doing other questions.
+temp <- house_data %>% 
+  group_by(bedrooms, bathrooms) %>% 
+  summarise(avg_price = format(mean(price, na.rm = T), nsmall = 2, big.mark = ",", decimal.mark = "."))
+pander(head(as.data.frame(temp)))
+```
+
+### Does this data make sense? 
+**Why or why not? If no, what would you segment price on (use only up to 3 factors)? **
+
+This table does not make sense because we have no bedroom, no bathroom houses being more expensive on average relative to some other houses which have a at least one bedroom and/or bathroom!
+
+Assuming we want to see what factors can give a better indication of price, to get a more accurate value of house price, one would segment on the following two factors:
+
+(@) *sqft_living15* - This is because the living space is a better proxy of the size of a house than the number of bedrooms and bathrooms it has. We use this variable instead of *sqft_living* because this one can include renovations which can help boost the price of a house.
+
+(@) *zipcode* - This is because where a house is located can influence it's price. For instance, if it's located in an area that has good schools, a hospital, low crime, and a shopping centre nearby, then the house will be more expensive compared to a house that isn't.
+```{r Q2.2.1}
+temp <- house_data %>% 
+  group_by(sqft_living15, zipcode, id) %>% 
+  summarise(avg_price = format(mean(price, na.rm = T), nsmall = 2, big.mark = ","))
+```
+## Which are price outliers?
+**Give a list of IDs and show your work. What's your rationale for choosing these? Brief explanation would be helpful here.**
+
+Price outliers are observations within our dataset whose associated price are extreme relative to the rest of the other observations.
+
+We will use the *sqft_living15* and *zipcode* grouping that we suggested above as our basis for checking outliers, and assume no other factors have an effect on house prices. Then by arranging our dataset by *zipcode* and *sqft_living15* in ascending order, we expect houses that have a larger *sqft_living15* value within the same *zipcode* to have higher prices. Thus outliers will be instances where this is not the case - when a house is more expensive than another house within the same *zipcode* despite having smaller *sqft_living15*.
+
+In the output code below, we will show a small selection of ID codes that we consider to be outliers. This is to enhance the readability of the document.
+```{r Q2.3}
+# Store all the unique zipcodes into a vector
+zipcodes <- unique(zipcode)
+# Create list object which stores dataframe objects filtered on each zipcode
+house_data_by_zipcode <- list()
+# Loop so that we can create multiple dataframes of house_data but filtered for each unique zipcode and each arranged by sqft_living15. We arranged by sqft_living15 and price so that we can apply zipcodeIDList function below.
+for(i in 1:length(zipcodes)){
+  house_data_by_zipcode[[i]] <- house_data %>%
+                                  filter(zipcode == zipcodes[i]) %>% 
+                                  arrange(sqft_living15, price) %>% 
+                                  dplyr::select(id, zipcode, sqft_living15, price)
+}
+
+# Check that each object in house_data_by_zipcode list has only one zipcode. Expect result, j, to return 70 if works.
+j = 0
+for (i in 1:length(house_data_by_zipcode)) {
+  if(unique(house_data_by_zipcode[[i]]$zipcode) %in% zipcodes)
+    j = j + 1
+}
+
+# The function then stores the resulting id_vector into our zipcodeIDList list object where each object in this list are the IDs of outliers for a given zipcode.
+
+# Create id_vector vector to store outlier IDs
+id_vector <- c()
+# Create zipcodeIDList to store id_vector vector for each unique zipcode - thus this list will have all the outlier IDs
+zipcodeOutlierIDList <- list()
+# Function loops over price column, and stores the ID of houses whose price is lower than that of the above house's price. It stores these IDs in a vector called id_vector.
+GetOutlierID <- function(x) {
+  j = 1
+  noRows <- nrow(x) - 1
+  for(i in 1:noRows) {
+    if(x[i,4] > x[i+1,4]) {
+      id_vector[j] <<- x[i,1] # double arrows to store output of function from local to global environment
+      j = j +1
+    }
+  }
+}
+
+# Now collect all the outlier IDs
+for(i in 1:length(house_data_by_zipcode)){
+  GetOutlierID(house_data_by_zipcode[[i]])
+  zipcodeOutlierIDList[[i]] <- id_vector
+}
+
+# Quick check that the the last loop and everything before it worked as we expected. We expect the statement below to be FALSE if the last loop worked.
+# id_vector[[1]] == zipcodeOutlierIDList[[1]][1]
+# Unlist into a vector so that we can output it nicely
+zipcodeOutliers_final <- unlist(zipcodeOutlierIDList)
+rm(house_data_by_zipcode, zipcodes, id_vector, zipcodeOutlierIDList)
+pander(head(zipcodeOutliers_final, n = 30))
+```
+
+## Visualise something cool, tell us a story!
+In Figure 1 below, we have the trend of house prices by the year they are built, split by the condition they are in. Interestingly, we see that houses with a condition of *3* and *4* are on the upward trend and have the highest latest prices, whereas all the other house conditions are on a downward trend. This is peculiar as immediate logic suggests that  houses in better condition should fetch a higher price.
+Possible reasons for why this may be the case can involve:
+
+- Other factors such as *zipcode* and *overall grade* given to the housing unit by King County's grading system. This will be explored further.
+
+- The housing market focusing on houses that have a condition of *3* and *4* because developers see the highest growth in demand for these types of houses, and they offer the highest rate of return on investment. This is backed up by the fact that the trendline for houses with other conditions does not extend as far right as houses with conditions *3* and *4*. To investigate this hypothesis further, need access to other datasets.
+```{r Q2.4, fig.align = 'center', fig.cap = 'Figure 1'}
+ggplot(data = house_data, mapping = aes(x = yr_built, y = price)) +
+  geom_smooth(aes(colour = as.factor(condition)), se = FALSE) +
+  labs(title = "Trend of House Prices in King County, USA",
+        x = "Year House was Built",
+        y = "House Price ($)",
+       colour = "House Condition") +
+                      theme(plot.title = element_text(face = "bold", size = 15, hjust = 0.5)) +
+                      theme(axis.title = element_text(size = 15)) +
+  scale_y_continuous(labels = scales::comma)
+```
+```{r echo = FALSE}
+house_data$zipcode <- as.factor(zipcode)
+condGradeCor <- cor(x = condition, y = grade)
+```
+
+Firstly, before investigating whether *zipcode* or *grade* are better drivers of house prices compared to the *condition*, check how correlated *condition* is to these two factors. If they are highly correlated, then they won't be a significantly larger driver of house prices because these factors will capture similar aspects to *condition*.
+Note that we cannot compute the correlation of *condition* with *zipcode* because *condition* is a quantitative variable whereas *zipcode* is a categorical variable.
+From computing the correlation between *condition* and *grade*, we find that value is `r toString(round(condGradeCor, digits = 2))`, which means *condition* and *grade* are `r toString(ifelse(condGradeCor < 0.3, "highly uncorrelated hence grade may be a bigger driver of house price", ifelse(condGradeCor >= 0.3 & condGradeCor < 0.6, "fairly correlated hence grade could be a slightly bigger driver of house price", "highly correlated hence grade cannot be a bigger driver of house price")))`.
+
+
+In Figure 2 below, we have added a thrid dimension to our house price over year house was built plot - we have these plots for each overall grading King County have assigned. From this, we can see that clearly houses with better grades have higher house prices.
+Even more interesting is the observation that in the higher grades, those with a *10* and *11* grade have had a fall in their price over time, whereas for those with a grade *12*, they have seen a slight increase. Graded *13* houses have been virtually constant throughout the period. 
+This suggests that the *grade* of a house is a better indicator of house price than *condition* is.
+
+However, we should be careful in saying whether *grade* is a better driver of house price than *condition* is because we do not know how these grades are formulated. If they account for the house price too, then we cannot say *grade* is a driver of house price.
+```{r message = TRUE, fig.align = 'center', fig.cap = 'Figure 2'}
+ggplot(data = house_data, mapping = aes(x = yr_built, y = price)) +
+  geom_smooth(aes(colour = condition, se = FALSE)) +
+  facet_wrap(~ as.factor(grade), nrow = 3) +
+  labs(title = "Trend of House Prices in King County, USA",
+        x = "Year House was Built",
+        y = "House Price ($)") +
+  theme(plot.title = element_text(face = "bold", size = 15, hjust = 0.5)) +
+  theme(axis.title = element_text(size = 15)) +
+  scale_y_continuous(labels = scales::comma)
+```
+
+This short piece of exploratory analysis is pretty cool because it allows us to quickly test some of our preconceptions on what may drive house prices the most. It thereby informs us further on how we can dig deeper into this dataset so that we can find out what are the main drivers of house prices. This can then be of great use if you're one of the below stakehoders:
+
+i) **Property Developer**: Know how to build property such that it fetches the highest price possible.
+
+i) **Local government/council**: Be able to effectively legislate for whether a new property development is unrealistically priced, and therefore harmful for the local community.
+
+i) **Prospective Buyer**: Aware of the real value of a property, so will be less likely to suffer from asymmetric information, and henceforth avoid paying over-the-odds. 
+
+***
+
+## Build a statistical model to predict price
+**Explain your model, the coefficients (if any), and the significance tests and values. Justify your model.**
+
+Due to time constraints, will build a multiple linear regression model with *price* as our dependent variable, and the following that we believe to influence *price* as our independent variables:
+
+i) *sqft_living15*
+
+i) *sqft_lot15*
+
+i) *zipcode*
+
+i) *grade*
+
+We haven't included the *bedrooms*, *bathrooms*, and *condition* variables because of our earlier arguments. *sqft_living* and *sqft_lot* are not included because *sqft_living15* and *sqft_lot15* will probably be correlated with them, and because a *sqft_living* and *sqft_lot* are more updated hence more indicative of price than the older version will. *waterfront*, *floors*, and *view* have not been included because they can be proxied by *sqft_living15* and *sqft_lot* to some extent.
+
+We thus run our model in the code below.
+```{r Linear Regression Model}
+regData <- house_data %>%
+            dplyr::select(id, price, grade, zipcode, sqft_living15, sqft_lot15)
+# See if need to take care of any NAs - no NAs in code below so no need to 'clean' data in this sense.
+# sum(is.na(regData))
+
+# Encode our categorical variable, zipcode
+regData$zipcode <- factor(regData$zipcode,
+                          levels = unique(zipcode), labels = c(1:length(unique(zipcode))))
+
+# Split dataset up into training and test set
+split = sample.split(regData$price, SplitRatio = 0.8)
+training_set = subset(regData, split == TRUE)
+test_set = subset(regData, split == FALSE)
+
+# lm function feature scales automatically so no need to do this manually
+house_lin_reg <- lm(price ~ sqft_living15 + sqft_lot15 + zipcode + grade, data = training_set)
+```
+Before we begin making predictions with this model on our test set, and comparing the results, we need to perform some regression diagnostics to see if our regression model is a valid. The checks to perform are:
+
+* Assumption 1: Linearity
+
+* Assumption 2: Residuals are normally distributed
+
+* Assumption 3: Residuals are homoscedastic
+
+* Assumption 4: Residuals are independent
+
+* Assumption 5: No multicollinearity between independent variables
+
+**Assumption 1: Linearity**
+
+To check if this condition is satisfied, need to plot the residuals (difference between our observed and predicted prices) against the fitted values (predicted prices), and look for a random scattering of points. In Figure 3 below, we do not have this, hence the first regression assumption/condition is violated. However, as we get higher fitted values, the points become more scattered so we should check the other assumptions before completely overhauling our regression model.
+```{r Assumption 1: Linearity, fig.align = 'center', fig.cap = 'Figure 3'}
+plot(house_lin_reg, which = 1)
+```
+
+**Assumption 2: Residuals are normally distributed**
+In Figure 4 below, we see that the residuals are fairly normally distributed which satisfies our assumption in the sense we have a bell-shaped curve. Our distribution is `r toString(ifelse(mean(residuals(house_lin_reg)) > median(residuals(house_lin_reg)), "negatively skewed", ifelse(residuals(house_lin_reg) > median(residuals(house_lin_reg)), "positively skewed", "symmetric")))` which means we do violate this assumption somewhat.
+
+```{r Assumption 2: Normal Dist Residuals, fig.align = 'center', fig.cap = 'Figure 4'}
+ggplot(mapping = aes(residuals(house_lin_reg))) +
+  geom_density(alpha = 0.3, fill = "#56B4E9") + 
+  labs(title = "Distribution of Residuals",
+        x = "Residuals from our linear model",
+        y = "Density") +
+  theme(plot.title = element_text(face = "bold", size = 15, hjust = 0.5)) +
+  theme(axis.title = element_text(size = 15)) +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma)
+```
+
+**Assumption 3: Residuals are homoscedastic**
+To test for homoscedastiity, we will use the Breusch-Pagan. From the output below, we see that our p-value is 0, so we can reject the null hypothesis that the variance of the residuals is constant, meaning we have heteroscedasticity in our residuals. This assumption is therefore violated.
+```{r Assumption 3: Homoscedastic Residuals}
+car::ncvTest(house_lin_reg)
+```
+
+**Correcting for heteroscedastic residuals**
+
+To correct for this, we could either include additional variables into our model or use Box-Cox transformation on our dependent variable, price. As we argued that the other variables within the dataset may not be appropriate, then we will conduct a Box-Cox transformation and conduct the tests again on the new model.
+```{r Box-Cox transformation on Price}
+distBCMod <- BoxCoxTrans(regData$price)
+regData <- cbind(regData, price_boxcox = predict(distBCMod, regData$price))
+training_set = subset(regData, split == TRUE)
+test_set = subset(regData, split == FALSE)
+
+# lm function feature scales automatically so no need to do this manually
+house_lin_reg <- lm(price_boxcox ~ sqft_living15 + sqft_lot15 + zipcode + grade, data = training_set)
+```
+
+**Rerun tests**
+
+From Figure 5, we see that we satisfy the linearity assumption much more strongly than before as we have a more random scaterring of points.
+
+```{r Assumption 1.2: Linearity, fig.align = 'center', fig.cap = 'Figure 5'}
+plot(house_lin_reg, which = 1)
+```
+
+From Figure 6, we see that our residuals are much more normally distributed before, as it is more symmetric, so the normality of residuals assumption is satisfied.
+```{r Assumption 2.2: Normal Dist Residuals, fig.align = 'center', fig.cap = 'Figure 6'}
+ggplot(mapping = aes(residuals(house_lin_reg))) +
+  geom_density(alpha = 0.3, fill = "#56B4E9") + 
+  labs(title = "Distribution of Residuals",
+        x = "Residuals from our linear model",
+        y = "Density") +
+  theme(plot.title = element_text(face = "bold", size = 15, hjust = 0.5)) +
+  theme(axis.title = element_text(size = 15)) +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma)
+```
+
+The p-value of the Breusch-Pagan test ran below is significantly below 0.05 so we can reject the null hypothesis that our residuals are homscedastic. 
+```{r Assumption 3.2: Homoscedastic Residuals}
+car::ncvTest(house_lin_reg)
+```
+
+**Assumption 4: Residuals are independent**
+
+Whether our residuals are independent depends on the data generating processs - the design of the research. Thus, this cannot be tested, and instead we will believe that this dataset on house prices in King County, USA meets this assumption.
+
+**Assumption 5: No multi-collinearity**
+
+To check for this, will compute the *Variance Inflation Factor*. From the output below, we can see that our GVIF values indicate we have almost no multi-collinearity as their values are close to being below 2. Therefore we satisfy this assumption.
+```{r Assumption 5: No Multi-collinearity}
+vif(house_lin_reg)
+```
+**Conclusion**: Whilst we violate *Assumption 3: Homoscedastic Residuals*, given that we satisfy the other regression assumptions, our linear model is, on balance, validated.
+
+**Outliers**
+Now that we have confirmed that our model validates the regression assumptions, we need to check for outliers as the existence of them can bias the estimation of our significance terms, such as p-values and confidence intervals.
+
+We will check the following:
+
+- **Leverage**: How unusual is the observation in terms of its values on the independent predictors?
+From Figure 7, there does not appear to be any point that sticks out from the rest, suggesting there are not any outliers.
+```{r Outliers: Leverage, fig.align = 'center', fig.cap = 'Figure 7'}
+training_set$rowNo <- seq.int(nrow(training_set))
+training_set$leverage <- hatvalues(house_lin_reg)
+ggplot(data = training_set, mapping = aes(rowNo, leverage)) + 
+  geom_point(colour = "#CC79A7") + 
+  ylim(0,1) + 
+  labs(title = "Outliers: Leverage",
+        x = "Row Number",
+        y = "Leverage") +
+  theme(plot.title = element_text(face = "bold", size = 15, hjust = 0.5)) +
+  theme(axis.title = element_text(size = 15))
+
+```
+
+- **Discrepancy**: Amount of difference between observed and predicted values. 
+From Figure 8, we see that no datapoint is too far vastly different from the rest indicating we do not have extreme discrepancy.
+```{r Outliers: Discrepancy, fig.align = 'center', fig.cap = 'Figure 8'}
+# Adds the studendized residuals to our dataframe
+training_set$studres <- studres(house_lin_reg)
+ggplot(data = training_set, mapping = aes(rowNo, studres)) + 
+  geom_point(colour = "#CC79A7") + 
+  geom_hline(color="blue", yintercept=0) +
+  labs(title = "Outliers: Discrepancy",
+        x = "Row Number",
+        y = "Studentized Residuals") +
+  theme(plot.title = element_text(face = "bold", size = 15, hjust = 0.5)) +
+  theme(axis.title = element_text(size = 15))
+
+```
+**Conclusion from diagnostics**: We can thus conclude that our regression is valid and there is no need to remove any outliers since we do not have any.
+
+**Regression Model**
+From our summary outputs of the linear regression model we ran, we see that the several of the *zipcode* coefficients are not statistically significant as their p-value is greater than our significance level of 0.05. Thus we can perform backward elimination on our regression model to remove non-statistically significant values.
+
+```{r Backward Selection}
+#house_lin_reg <- lm(price_boxcox ~ sqft_living15 + sqft_lot15 + zipcode + grade, data = training_set)
+summary(house_lin_reg)
+```
+Having performed backward elimination on all the indpendent variables within the model based on the Akaike information criterion (AIC), which is a measure of the relative quality of statistical models, we find that no variables were removed.  [^1]
+
+[^1]: We chose AIC as our criterion for variable selection because it is a goodness of fit measure that favours smaller residual error in the model, and penalises for including further predictors - helping to avoid overfitting. 
+Note that there is a warning against using automatic variable selection process here: https://stats.stackexchange.com/questions/20836/algorithms-for-automatic-model-selection/20856#20856
+
+```{r Backward Elimination}
+house_lin_reg2 <- step(house_lin_reg, direction = "backward", trace = FALSE)
+temp <- summary(house_lin_reg2)
+# Note we're truncating the output here for better readability.
+temp
+```
+We can look at the coefficient estimate for each of the variables to see how much a one unit increase in them affect the price of a house in King County, USA. For instance:
+
+- *sqft_living15* - One unit increase leads to approximately a `r toString(round(temp$coefficients[2,1], digits = 2))` change in house price average.
+
+- *zipcode2* - Moving to this zipcode can lead to approximately a `r toString(round(temp$coefficients[4,1], digits = 2))` change in house price on average.
+
+**Predictive Accuracy**
+
+Now from our regression output of our linear regression model after we performed backward elimination, we can judge how accurate it is by looking at the Adjusted-R^2 value, which is `r toString(round(temp$adj.r.squared, digits = 2))`. This is a `r toString(ifelse(temp$adj.r.squared > 0.65, "high so our model does a good job predicting", "not high enough in this context, and we need to investigate what other variables we can include to improve the predictive accuracy."))`.
+
+We can also visualise how accurate our model is by plotting the model's predicted values against the actual values from our test set. In the Figure 9 below, we can see that the points are fairly concentrated around the diagonal line which further confirms what we concluded from our Adjusted-R^2. [^2]
+
+[^2]: Note that the prices on the axes in Figure 9 have been Box-Cox transformed.
+```{r Predictive Accuracy, fig.align = 'center', fig.cap = 'Figure 9'}
+# Now predict the test_set results 
+y_pred = predict(house_lin_reg2, newdata = test_set)
+
+# Visualise the prediction results against the actual values
+ggplot() +
+  geom_point(data = test_set, mapping = aes(x = y_pred, y = price_boxcox), colour = "#56B4E9") +
+  geom_abline(slope = 1, intercept = 0) +
+  labs(title = "Linear Model Prediction versus Actual Prices",
+        x = "'Predicted' Price ($)",
+        y = "'Actual' Price ($)") +
+  theme(plot.title = element_text(face = "bold", size = 15, hjust = 0.5)) +
+  theme(axis.title = element_text(size = 15)) +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma)
+```
+
+***
